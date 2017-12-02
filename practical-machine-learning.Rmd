@@ -1,0 +1,121 @@
+---
+title: "Practical Machine Learning"
+author: "gmyrland"
+date: "`r Sys.Date()`"
+output: "html_document"
+---
+
+# Introduction
+
+The purpose of this report is to develop a machine learning model related to the quantified self movement.
+The goal is to identify the manner in which individuals performed a specific exercise -- namely, lifting barbell weights either correctly incorrectly.
+The classifier will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+```{r init}
+suppressPackageStartupMessages(library(dplyr))
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+# Data
+
+The data for this project comes from `http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har`.
+Test and training data were made available for the coursera course.
+
+```{r load}
+# Load Data
+train <- read.csv(url('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'), stringsAsFactors = FALSE)
+test <- read.csv(url('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'), stringsAsFactors = FALSE)
+```
+
+# Exploratory Analysis and Cleaning
+
+The training dataset has `r nrow(train)` rows and `r ncol(train)` columns, including the output column `classe`.
+`classe` comprises a categorical classifier with values: `r paste(unique(train$classe), collapse=", ")`.
+
+The test dataset has `r nrow(test)` rows and `r ncol(test)` columns.
+
+When reviewing the data, it's clear that there are many features which have a lot of `NA` values.
+To simplify the dataset, we can remove features which are more than half `NA` which will likely not have high predicitve power.
+
+```{r}
+threshold <- 0.5
+train <- train[sapply(train, function(x) mean(is.na(x)) <= threshold)]
+```
+
+We can further remove features which are not related to accelleration based on the column names.
+
+```{r}
+train <- train[grepl("accel|classe", names(train))]
+```
+
+This reduces the dataset to `r ncol(train)` features, most of which are numeric.
+
+# Model Development
+
+For the model, a random forest can be used.
+A random forest should provide fairly high accuracy without additional feature tuning.
+It should work fairly well "straight out of the box" for a problem like this.
+
+The k-fold cross validation is shown below.
+The table provides a confusion matrix of one of the cross validation trials to show that the model is learning.
+
+```{r, results='asis'}
+suppressPackageStartupMessages(library(randomForest))
+suppressPackageStartupMessages(library(caret))
+
+folds <- createFolds(train$class, k=10)
+latest_results <- NULL
+accs <- NULL
+for (i in 1:10) {
+  idx <- folds[[i]]
+  cv_train <- train[-idx, ]
+  cv_test <- train[idx, ]
+  fit <- randomForest(as.factor(classe) ~ ., data=cv_train)
+  cv_pred <- predict(fit, cv_test, type="class")
+  probs <- table(cv_pred, cv_test$classe)
+  accs <- c(accs, sum(diag(probs))/sum(probs))
+  latest_results <- as_data_frame(as.data.frame.matrix(probs))
+}
+knitr::kable(latest_results)
+```
+
+The accuracies of the 10 trials are:
+```{r, results='asis'}
+df_acc <- data_frame(Trial=1:10, Accuracy=accs)
+knitr::kable(df_acc)
+```
+
+The mean accuracy from the cross validation is `r mean(accs)`.
+This means the out-of-sample error rate is approximately
+```{r}
+1 - mean(accs)
+```
+
+The distribution of cross validation accuracies is shown below.
+
+```{r}
+library(ggplot2)
+ggplot(df_acc, aes(x=Trial, y=Accuracy), fill="darkgreen") +
+  geom_point() + expand_limits(y=c(0,1))
+```
+
+
+This is a fairly good outcome, and shows that the model is not tending to overfit.
+We can now train the model on the entire training set.
+
+```{r}
+fit <- randomForest(as.factor(classe) ~ ., data=train)
+summary(fit)
+```
+
+# Prediction
+
+To test the prediction, the model which was fitted against the entire training set can be run against the test set.
+
+```{r, results='asis'}
+test <- test[names(test) %in% names(train)]
+predictions <- predict(fit, test, type="class")
+knitr::kable(data.frame(Prediction=predictions))
+```
+
+The predicted values were sufficient to achieve 19/20 on the quiz, which is a fairly good result.
